@@ -422,6 +422,100 @@ export function registerTools(server, crmClient) {
     }
   );
 
+  // ── join_deal_team ───────────────────────────────────────────
+  server.tool(
+    'join_deal_team',
+    'Add the current user (or a specified user) to the deal team of an opportunity via msp_dealteams. Stages the write for human approval.',
+    {
+      opportunityId: z.string().describe('Opportunity GUID to join'),
+      userId: z.string().optional().describe('System user GUID to add. Defaults to current user if omitted.'),
+      role: z.string().optional().describe('Role description for the deal team member (e.g. "Solution Engineer")')
+    },
+    async ({ opportunityId, userId, role }) => {
+      const oppNid = normalizeGuid(opportunityId);
+      if (!isValidGuid(oppNid)) return error('Invalid opportunityId GUID');
+
+      // Resolve user
+      let userNid;
+      if (userId) {
+        userNid = normalizeGuid(userId);
+        if (!isValidGuid(userNid)) return error('Invalid userId GUID');
+      } else {
+        const whoAmI = await crmClient.request('WhoAmI');
+        if (!whoAmI.ok || !whoAmI.data?.UserId) {
+          return error(`Unable to resolve current CRM user: ${whoAmI.data?.message || 'WhoAmI failed'}`);
+        }
+        userNid = normalizeGuid(whoAmI.data.UserId);
+      }
+
+      // Verify the opportunity exists
+      const oppLookup = await crmClient.request(`opportunities(${oppNid})`, {
+        query: { $select: 'name' }
+      });
+      if (!oppLookup.ok) {
+        return error(`Opportunity lookup failed (${oppLookup.status}): ${oppLookup.data?.message || 'not found'}`);
+      }
+      const opportunityName = oppLookup.data?.name || null;
+
+      // Resolve user display name
+      const userLookup = await crmClient.request(`systemusers(${userNid})`, {
+        query: { $select: 'fullname' }
+      });
+      if (!userLookup.ok) {
+        return error(`User lookup failed (${userLookup.status}): ${userLookup.data?.message || 'not found'}`);
+      }
+      const userName = userLookup.data?.fullname || null;
+
+      // Check if already on deal team
+      const existing = await crmClient.requestAllPages('msp_dealteams', {
+        query: {
+          $filter: `_msp_dealteamuserid_value eq '${userNid}' and _msp_parentopportunityid_value eq '${oppNid}' and statecode eq 0`,
+          $select: 'msp_dealteamid',
+          $top: '1'
+        }
+      });
+      if (existing.ok && existing.data?.value?.length > 0) {
+        return text({
+          alreadyOnTeam: true,
+          dealTeamId: existing.data.value[0].msp_dealteamid,
+          message: `${userName || userNid} is already on the deal team for "${opportunityName || oppNid}".`
+        });
+      }
+
+      const payload = {
+        'msp_dealteamuserid@odata.bind': `/systemusers(${userNid})`,
+        'msp_parentopportunityid@odata.bind': `/opportunities(${oppNid})`,
+        'msp_name': userName || userNid
+      };
+
+      const description = `Add ${userName || userNid}${role ? ` (${role})` : ''} to deal team for "${opportunityName || oppNid}"`;
+
+      const queue = getApprovalQueue();
+      const op = queue.stage({
+        type: 'join_deal_team',
+        entitySet: 'msp_dealteams',
+        method: 'POST',
+        payload,
+        beforeState: null,
+        description
+      });
+
+      return text({
+        staged: true,
+        operationId: op.id,
+        description: op.description,
+        identity: {
+          opportunityId: oppNid,
+          opportunityName,
+          userId: userNid,
+          userName
+        },
+        payload,
+        message: `Staged ${op.id}: ${description}. Approve via execute_operation.`
+      });
+    }
+  );
+
   // ── create_task ─────────────────────────────────────────────
   server.tool(
     'create_milestone',

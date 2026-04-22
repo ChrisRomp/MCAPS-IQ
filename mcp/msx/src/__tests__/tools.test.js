@@ -342,6 +342,84 @@ describe('registerTools', () => {
     });
   });
 
+  describe('join_deal_team', () => {
+    const validOppId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+
+    it('stages a deal team addition for the current user', async () => {
+      crm.request.mockImplementation(async (path) => {
+        if (path === 'WhoAmI') return { ok: true, status: 200, data: { UserId: 'abc10000-0000-0000-0000-000000000123' } };
+        if (path.startsWith('opportunities(')) return { ok: true, status: 200, data: { name: 'Contoso GHCP' } };
+        if (path.startsWith('systemusers(')) return { ok: true, status: 200, data: { fullname: 'Chris Romp' } };
+        return { ok: true, status: 200, data: {} };
+      });
+      // Check existing membership — not on team
+      crm.requestAllPages.mockResolvedValueOnce({ ok: true, status: 200, data: { value: [] } });
+
+      const result = await callTool(server, 'join_deal_team', { opportunityId: validOppId });
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.staged).toBe(true);
+      expect(parsed.identity.userName).toBe('Chris Romp');
+      expect(parsed.identity.opportunityName).toBe('Contoso GHCP');
+    });
+
+    it('returns early if user is already on the deal team', async () => {
+      crm.request.mockImplementation(async (path) => {
+        if (path === 'WhoAmI') return { ok: true, status: 200, data: { UserId: 'abc10000-0000-0000-0000-000000000123' } };
+        if (path.startsWith('opportunities(')) return { ok: true, status: 200, data: { name: 'Contoso GHCP' } };
+        if (path.startsWith('systemusers(')) return { ok: true, status: 200, data: { fullname: 'Chris Romp' } };
+        return { ok: true, status: 200, data: {} };
+      });
+      // Already on team
+      crm.requestAllPages.mockResolvedValueOnce({
+        ok: true, status: 200, data: { value: [{ msp_dealteamid: 'dt-existing' }] }
+      });
+
+      const result = await callTool(server, 'join_deal_team', { opportunityId: validOppId });
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.alreadyOnTeam).toBe(true);
+      expect(parsed.dealTeamId).toBe('dt-existing');
+    });
+
+    it('returns error for invalid opportunity GUID', async () => {
+      const result = await callTool(server, 'join_deal_team', { opportunityId: 'not-a-guid' });
+      expect(result.isError).toBe(true);
+    });
+
+    it('returns error when opportunity not found', async () => {
+      crm.request.mockImplementation(async (path) => {
+        if (path === 'WhoAmI') return { ok: true, status: 200, data: { UserId: 'abc-123' } };
+        if (path.startsWith('opportunities(')) return { ok: false, status: 404, data: { message: 'not found' } };
+        return { ok: true, status: 200, data: {} };
+      });
+
+      const result = await callTool(server, 'join_deal_team', { opportunityId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' });
+      expect(result.isError).toBe(true);
+    });
+
+    it('returns error for invalid userId GUID', async () => {
+      const result = await callTool(server, 'join_deal_team', {
+        opportunityId: validOppId,
+        userId: 'not-a-guid'
+      });
+      expect(result.isError).toBe(true);
+    });
+
+    it('returns error when specified user not found', async () => {
+      crm.request.mockImplementation(async (path) => {
+        if (path.startsWith('opportunities(')) return { ok: true, status: 200, data: { name: 'Contoso GHCP' } };
+        if (path.startsWith('systemusers(')) return { ok: false, status: 404, data: { message: 'not found' } };
+        return { ok: true, status: 200, data: {} };
+      });
+
+      const result = await callTool(server, 'join_deal_team', {
+        opportunityId: validOppId,
+        userId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      });
+      expect(result.isError).toBe(true);
+    });
+  });
+
   describe('get_milestones (enhanced)', () => {
     const makeMilestone = (name, status, oppName, wlName) => ({
       msp_engagementmilestoneid: 'ms-1',

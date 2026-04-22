@@ -221,6 +221,7 @@ The `get_my_active_opportunities` tool uses `msp_dealteams` as its primary looku
 | Am I on the opportunity deal team? | `crm_query` on `msp_dealteams` filtered by user | Reliable (where entity is available) |
 | Who owns milestones on this opportunity? | `get_milestones({ opportunityId })` → `_ownerid_value` | Reliable |
 | Which opportunities am I involved in? | `get_my_active_opportunities()` | Reliable (deal team + milestone heuristic fallback) |
+| Add myself/someone to a deal team | `join_deal_team({ opportunityId, userId? })` | Staged write (human approval required) |
 
 ## Dynamic Schema Discovery
 When a property is not listed above, use the `crm_list_entity_properties` MCP tool:
